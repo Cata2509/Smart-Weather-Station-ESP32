@@ -1,0 +1,53 @@
+from flask import Flask, request, jsonify, render_template
+import smtplib
+
+app = Flask(__name__)
+
+weather_data = {}
+
+# Configurarea detaliilor pentru e-mail
+SMTP_SERVER = 'smtp.example.com'
+SMTP_PORT = 587
+SMTP_USERNAME = 'your_email@example.com'
+SMTP_PASSWORD = 'your_password'
+EMAIL_FROM = 'your_email@example.com'
+EMAIL_TO = ['recipient1@example.com', 'recipient2@example.com']
+EMAIL_SUBJECT = 'Weather Alert'
+
+def send_email(message):
+    headers = ["From: " + EMAIL_FROM, "Subject: " + EMAIL_SUBJECT, "To: " + ", ".join(EMAIL_TO),
+               "MIME-Version: 1.0", "Content-Type: text/plain"]
+    headers = "\r\n".join(headers)
+
+    session = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+    session.ehlo()
+    session.starttls()
+    session.ehlo()
+    session.login(SMTP_USERNAME, SMTP_PASSWORD)
+
+    session.sendmail(EMAIL_FROM, EMAIL_TO, headers + "\r\n\r\n" + message)
+    session.quit()
+
+@app.route('/weather', methods=['POST'])
+def update_weather():
+    global weather_data
+    data = request.get_json()
+    weather_data = {
+        'temperature': data['temperature'],
+        'humidity': data['humidity']
+    }
+    alert_message = data.get('alert', '')
+    if alert_message:
+        send_email(alert_message)
+    return jsonify({'message': 'Data received successfully'})
+
+@app.route('/weather', methods=['GET'])
+def get_weather():
+    return jsonify(weather_data)
+
+@app.route('/')
+def index():
+    return render_template('index.html', data=weather_data)
+
+if __name__ == '__main__':
+    app.run(debug=True)
