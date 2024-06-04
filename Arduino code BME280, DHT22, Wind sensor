@@ -1,0 +1,116 @@
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <DHT.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BME280.h>
+
+#define DHTPIN 4 // Pinul la care este conectat senzorul DHT
+#define DHTTYPE DHT22 // Tipul senzorului DHT
+#define WIND_SENSOR_PIN 5 // Pinul digital pentru senzorul de viteza a vantului
+
+const char* ssid = "numele_retelei_tale";
+const char* password = "parola_retelei_tale";
+const char* serverName = "http://adresa_serverului_tau/weather";
+
+// Obiectele pentru senzori
+DHT dht(DHTPIN, DHTTYPE);
+Adafruit_BME280 bme; // I2C
+
+// Variabile pentru senzorul de viteza a vantului
+volatile int windCount = 0;
+unsigned long lastWindCheck = 0;
+float windSpeed = 0.0;
+
+// ISR pentru senzorul de viteza a vantului
+void IRAM_ATTR windISR() {
+  windCount++;
+}
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi...");
+  }
+
+  Serial.println("Connected to WiFi");
+
+  dht.begin();
+
+  if (!bme.begin(0x76)) {
+    Serial.println("Could not find a valid BME280 sensor, check wiring!");
+    while (1);
+  }
+
+  pinMode(WIND_SENSOR_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(WIND_SENSOR_PIN), windISR, FALLING);
+}
+
+void loop() {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+
+    // Citirea datelor de la senzorul DHT22
+    float temperature = dht.readTemperature();
+    float humidity = dht.readHumidity();
+
+    if (isnan(temperature) || isnan(humidity)) {
+      Serial.println("Failed to read from DHT sensor!");
+      return;
+    }
+
+    // Citirea datelor de la senzorul BME280
+    float pressure = bme.readPressure() / 100.0F; // Presiunea in hPa
+
+    // Calcularea vitezei vântului
+    unsigned long currentTime = millis();
+    unsigned long timeDiff = currentTime - lastWindCheck;
+    if (timeDiff >= 1000) {
+      windSpeed = (windCount / 2.0) * (2.4 / (timeDiff / 1000.0)); // Converteste impulsurile in viteza (m/s)
+      windCount = 0;
+      lastWindCheck = currentTime;
+    }
+
+    // Verifică dacă condițiile meteo sunt severe
+    bool isSevere = false;
+    String alertMessage = "";
+    if (temperature > 35 || temperature < 0) {
+      isSevere = true;
+      alertMessage += "Temperature Alert: " + String(temperature) + "°C\n";
+    }
+    if (humidity > 90 || humidity < 20) {
+      isSevere = true;
+      alertMessage += "Humidity Alert: " + String(humidity) + "%\n";
+    }
+    if (pressure < 950 || pressure > 1050) {
+      isSevere = true;
+      alertMessage += "Pressure Alert: " + String(pressure) + " hPa\n";
+    }
+    if (windSpeed > 10) { // Exemplu de prag pentru viteza vântului
+      isSevere = true;
+      alertMessage += "Wind Speed Alert: " + String(windSpeed) + " m/s\n";
+    }
+
+    // Trimiterea datelor meteo și a alertelor
+    http.begin(serverName);
+    http.addHeader("Content-Type", "application/json");
+
+    String httpRequestData = "{\"temperature\":" + String(temperature) + ",\"humidity\":" + String(humidity) + ",\"pressure\":" + String(pressure) + ",\"windSpeed\":" + String(windSpeed) + ", \"alert\":\"" + alertMessage + "\"}";
+    int httpResponseCode = http.POST(httpRequestData);
+
+    if (httpResponseCode > 0) {
+      String response = http.getString();
+      Serial.println(httpResponseCode);
+      Serial.println(response);
+    } else {
+      Serial.print("Error on sending POST: ");
+      Serial.println(httpResponseCode);
+    }
+
+    http.end();
+  }
+
+  delay(60000); // Trimiterea datelor la fiecare 60 de secunde
+}
